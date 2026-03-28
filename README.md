@@ -2,7 +2,7 @@
 
 A terminal multiplexer for [Claude Code](https://claude.ai/claude-code). Manage multiple Claude sessions across projects from a single TUI.
 
-<video src="https://github.com/sviniabanditka/claudex/raw/main/intro.mp4" width="100%"></video>
+[**Watch demo**](https://github.com/sviniabanditka/claudex/raw/main/intro.mp4)
 
 ## Features
 
