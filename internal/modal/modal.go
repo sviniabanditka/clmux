@@ -2,6 +2,7 @@ package modal
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,6 +18,7 @@ const (
 	ModalAddProject
 	ModalRenameThread
 	ModalConfirmDelete
+	ModalLoading
 )
 
 type SubmitMsg struct {
@@ -28,17 +30,32 @@ type SubmitMsg struct {
 
 type CancelMsg struct{}
 
+// LoadingDoneMsg is sent when a background operation completes.
+type LoadingDoneMsg struct {
+	Action string // what was done, for post-processing
+	ProjectID string
+	ThreadID  string
+}
+
+// SpinnerTickMsg drives the spinner animation.
+type SpinnerTickMsg struct{}
+
 type Model struct {
 	kind      Kind
 	title     string
-	message   string // for confirm dialogs
+	message   string
 	input     textinput.Model
 	projectID string
 	threadID  string
 	width     int
 	height    int
 	err       string
+	// Loading state
+	loadingAction string
+	spinnerFrame  int
 }
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func New() Model {
 	ti := textinput.New()
@@ -46,14 +63,9 @@ func New() Model {
 	return Model{kind: ModalNone, input: ti}
 }
 
-func (m Model) Active() bool {
-	return m.kind != ModalNone
-}
-
-func (m *Model) SetSize(w, h int) {
-	m.width = w
-	m.height = h
-}
+func (m Model) Active() bool   { return m.kind != ModalNone }
+func (m Model) IsLoading() bool { return m.kind == ModalLoading }
+func (m *Model) SetSize(w, h int) { m.width = w; m.height = h }
 
 func (m *Model) Show(kind Kind, title, placeholder string) {
 	m.kind = kind
@@ -83,9 +95,19 @@ func (m *Model) ShowConfirm(title, message, projectID, threadID string) {
 	m.threadID = threadID
 }
 
-func (m *Model) SetError(err string) {
-	m.err = err
+func (m *Model) ShowLoading(title, message, action, projectID, threadID string) {
+	m.kind = ModalLoading
+	m.title = title
+	m.message = message
+	m.loadingAction = action
+	m.spinnerFrame = 0
+	m.input.Blur()
+	m.err = ""
+	m.projectID = projectID
+	m.threadID = threadID
 }
+
+func (m *Model) SetError(err string) { m.err = err }
 
 func (m *Model) Hide() {
 	m.kind = ModalNone
@@ -96,13 +118,29 @@ func (m Model) Init() tea.Cmd {
 	return textinput.Blink
 }
 
+func SpinnerTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+		return SpinnerTickMsg{}
+	})
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !m.Active() {
 		return m, nil
 	}
 
 	switch msg := msg.(type) {
+	case SpinnerTickMsg:
+		if m.kind == ModalLoading {
+			m.spinnerFrame = (m.spinnerFrame + 1) % len(spinnerFrames)
+			return m, SpinnerTick()
+		}
+		return m, nil
 	case tea.KeyMsg:
+		if m.kind == ModalLoading {
+			// Loading modal doesn't accept input
+			return m, nil
+		}
 		if m.kind == ModalConfirmDelete {
 			return m.updateConfirm(msg)
 		}
@@ -160,14 +198,22 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	if m.kind == ModalConfirmDelete {
+	switch m.kind {
+	case ModalLoading:
+		spinner := lipgloss.NewStyle().Foreground(theme.Accent).Bold(true).Render(spinnerFrames[m.spinnerFrame])
+		b.WriteString(spinner + " " + theme.HeaderStyle.Render(m.title))
+		b.WriteString("\n\n")
+		b.WriteString(theme.MutedStyle.Render(m.message))
+
+	case ModalConfirmDelete:
 		b.WriteString(theme.ErrorStyle.Render(m.title))
 		b.WriteString("\n\n")
 		b.WriteString(theme.MutedStyle.Render(m.message))
 		b.WriteString("\n\n")
 		b.WriteString(theme.HintKeyStyle.Render("y") + theme.HintDescStyle.Render("/enter: confirm   "))
 		b.WriteString(theme.HintKeyStyle.Render("n") + theme.HintDescStyle.Render("/esc: cancel"))
-	} else {
+
+	default:
 		b.WriteString(theme.HeaderStyle.Render(m.title))
 		b.WriteString("\n\n")
 		b.WriteString(m.input.View())

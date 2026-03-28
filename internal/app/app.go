@@ -28,16 +28,16 @@ const (
 )
 
 type Model struct {
-	sidebar sidebar.Model
-	panel   panel.Model
-	modal   modal.Model
-	store   *store.Store
-	manager *session.Manager
-	focus   focus
-	width   int
-	height  int
-	// Track first user input per thread for auto-naming
+	sidebar  sidebar.Model
+	panel    panel.Model
+	modal    modal.Model
+	store    *store.Store
+	manager  *session.Manager
+	focus    focus
+	width    int
+	height   int
 	inputBuf map[string][]byte
+	quitting bool
 }
 
 func New(s *store.Store) Model {
@@ -69,10 +69,46 @@ func (m *Model) Init() tea.Cmd {
 	return m.modal.Init()
 }
 
+func (m *Model) panelCols() uint16 {
+	sw := m.store.State.SidebarWidth
+	if sw <= 0 {
+		sw = 44
+	}
+	cols := m.width - sw - 1 // sidebar border = 1
+	if cols < 10 {
+		cols = 80
+	}
+	return uint16(cols)
+}
+
+func (m *Model) panelRows() uint16 {
+	if m.height < 1 {
+		return 24
+	}
+	return uint16(m.height)
+}
+
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	// Modal takes priority
+	// Loading modal — only allow spinner ticks and loading done
+	if m.modal.IsLoading() {
+		switch msg := msg.(type) {
+		case modal.SpinnerTickMsg:
+			newModal, cmd := m.modal.Update(msg)
+			m.modal = newModal
+			return m, cmd
+		case modal.LoadingDoneMsg:
+			m.modal.Hide()
+			return m.handleLoadingDone(msg)
+		case tea.WindowSizeMsg:
+			m.handleResize(msg)
+			return m, nil
+		}
+		return m, nil
+	}
+
+	// Regular modal
 	if m.modal.Active() {
 		switch msg := msg.(type) {
 		case tea.KeyMsg:
@@ -99,21 +135,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if key.Matches(msg, Keys.Quit) {
-			m.manager.StopAll()
-			return m, tea.Quit
+			return m.startQuit()
 		}
 		if key.Matches(msg, Keys.ToggleFocus) {
 			m.toggleFocus()
 			return m, nil
 		}
-
-		// Panel focused — forward to PTY
 		if m.focus == focusPanel && m.panel.ThreadID() != "" {
 			if m.manager.IsRunning(m.panel.ThreadID()) {
 				raw := keyToBytes(msg)
 				if raw != nil {
 					m.manager.Write(m.panel.ThreadID(), raw)
-					// Track input for auto-naming
 					m.trackInput(m.panel.ThreadID(), msg)
 				}
 				return m, nil
@@ -121,7 +153,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseMsg:
-		// Route mouse to sidebar if click is within sidebar bounds
 		sidebarWidth := m.store.State.SidebarWidth
 		if sidebarWidth <= 0 {
 			sidebarWidth = 44
@@ -141,7 +172,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sidebar.SetFocused(false)
 				m.panel.SetFocused(true)
 			}
-			// Forward mouse scroll to PTY if applicable
 			if m.panel.ThreadID() != "" && m.manager.IsRunning(m.panel.ThreadID()) {
 				if msg.Button == tea.MouseButtonWheelUp {
 					m.manager.Write(m.panel.ThreadID(), []byte{27, '[', '5', '~'})
@@ -173,7 +203,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.selectThread(msg.ProjectID, msg.ThreadID)
 
 	case sidebar.CloseThreadMsg:
-		return m.closeThread(msg.ProjectID, msg.ThreadID)
+		return m.startCloseThread(msg.ProjectID, msg.ThreadID)
 
 	case sidebar.RenameThreadMsg:
 		t := m.store.FindThread(msg.ProjectID, msg.ThreadID)
@@ -229,9 +259,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.store.Save()
 		}
 		return m, nil
+
+	case modal.LoadingDoneMsg:
+		m.modal.Hide()
+		return m.handleLoadingDone(msg)
 	}
 
-	// Route to focused component
 	if m.focus == focusSidebar {
 		newSidebar, cmd := m.sidebar.Update(msg)
 		m.sidebar = newSidebar
@@ -248,13 +281,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) View() string {
 	sidebarView := m.sidebar.View()
 	panelView := m.panel.View()
-
 	layout := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, panelView)
 
 	if m.modal.Active() {
 		return m.modal.View()
 	}
-
 	return layout
 }
 
@@ -268,15 +299,13 @@ func (m *Model) handleResize(msg tea.WindowSizeMsg) {
 	if sidebarWidth <= 0 {
 		sidebarWidth = 44
 	}
-	panelWidth := m.width - sidebarWidth - 2
+	panelWidth := m.width - sidebarWidth - 1 // border = 1 col
 
 	m.sidebar.SetSize(sidebarWidth, m.height)
 	m.panel.SetSize(panelWidth, m.height)
 	m.modal.SetSize(m.width, m.height)
 
-	rows := uint16(m.height)
-	cols := uint16(panelWidth)
-	m.manager.ResizeAll(rows, cols)
+	m.manager.ResizeAll(m.panelRows(), m.panelCols())
 }
 
 // ── Focus ──
@@ -314,11 +343,8 @@ func (m *Model) selectThread(projectID, threadID string) (tea.Model, tea.Cmd) {
 		t := m.store.FindThread(projectID, threadID)
 		if p != nil && t != nil {
 			resume := store.ClaudeSessionExists(t.SessionID)
-			rows := uint16(m.height)
-			cols := uint16(m.width - m.store.State.SidebarWidth - 2)
-			if cols <= 0 {
-				cols = 80
-			}
+			rows := m.panelRows()
+			cols := m.panelCols()
 			m.manager.Open(threadID, t.SessionID, p.Path, t.Name, resume, rows, cols)
 			t.Status = store.ThreadOpen
 			t.UpdatedAt = time.Now()
@@ -334,88 +360,127 @@ func (m *Model) selectThread(projectID, threadID string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) closeThread(projectID, threadID string) (tea.Model, tea.Cmd) {
-	m.manager.Close(threadID)
-
-	t := m.store.FindThread(projectID, threadID)
-	if t != nil {
-		t.Status = store.ThreadSuspended
-		t.UpdatedAt = time.Now()
-	}
-
-	if m.panel.ThreadID() == threadID {
-		m.panel.SetThread("")
-		m.panel.SetContent("")
-		m.store.State.ActiveThread = ""
-		m.sidebar.SetActiveThread("")
-	}
-	m.sidebar.Rebuild()
-	m.store.Save()
-	return m, nil
-}
-
-// ── Delete ──
-
-func (m *Model) deleteProject(projectID string) (tea.Model, tea.Cmd) {
-	// Close all running threads in this project
-	p := m.store.FindProject(projectID)
-	if p == nil {
+// startCloseThread shows loading modal and closes in background.
+func (m *Model) startCloseThread(projectID, threadID string) (tea.Model, tea.Cmd) {
+	if !m.manager.IsRunning(threadID) {
+		// Not running — just update status
+		t := m.store.FindThread(projectID, threadID)
+		if t != nil {
+			t.Status = store.ThreadSuspended
+			t.UpdatedAt = time.Now()
+		}
+		m.sidebar.Rebuild()
+		m.store.Save()
 		return m, nil
 	}
-	for _, t := range p.Threads {
-		if m.manager.IsRunning(t.ID) {
-			m.manager.Close(t.ID)
-		}
-	}
 
-	// Clear panel if active thread is in this project
-	if m.store.State.ActiveProject == projectID {
-		m.panel.SetThread("")
-		m.panel.SetContent("")
-		m.store.State.ActiveProject = ""
-		m.store.State.ActiveThread = ""
-	}
+	m.modal.ShowLoading(
+		"Closing session",
+		"Saving conversation and stopping Claude...",
+		"close_thread", projectID, threadID,
+	)
+	m.modal.SetSize(m.width, m.height)
 
-	// Remove project from store
-	projects := m.store.State.Projects
-	for i, proj := range projects {
-		if proj.ID == projectID {
-			m.store.State.Projects = append(projects[:i], projects[i+1:]...)
-			break
-		}
-	}
-
-	m.sidebar.Rebuild()
-	m.store.Save()
-	return m, nil
+	pid, tid := projectID, threadID
+	mgr := m.manager
+	return m, tea.Batch(modal.SpinnerTick(), func() tea.Msg {
+		mgr.Close(tid)
+		return modal.LoadingDoneMsg{Action: "close_thread", ProjectID: pid, ThreadID: tid}
+	})
 }
 
-func (m *Model) deleteThread(projectID, threadID string) (tea.Model, tea.Cmd) {
-	// Close if running
-	if m.manager.IsRunning(threadID) {
-		m.manager.Close(threadID)
-	}
-
-	// Clear panel if this was active
-	if m.panel.ThreadID() == threadID {
-		m.panel.SetThread("")
-		m.panel.SetContent("")
-		m.store.State.ActiveThread = ""
-	}
-
-	// Remove from project
-	p := m.store.FindProject(projectID)
-	if p != nil {
-		for i, t := range p.Threads {
-			if t.ID == threadID {
-				p.Threads = append(p.Threads[:i], p.Threads[i+1:]...)
+// startQuit shows loading modal and stops all sessions in background.
+func (m *Model) startQuit() (tea.Model, tea.Cmd) {
+	// Check if any sessions are running
+	hasRunning := false
+	for _, p := range m.store.State.Projects {
+		for _, t := range p.Threads {
+			if m.manager.IsRunning(t.ID) {
+				hasRunning = true
 				break
 			}
 		}
 	}
 
-	m.sidebar.Rebuild()
-	m.store.Save()
+	if !hasRunning {
+		return m, tea.Quit
+	}
+
+	m.quitting = true
+	m.modal.ShowLoading(
+		"Shutting down",
+		"Saving all sessions and stopping Claude processes...",
+		"quit", "", "",
+	)
+	m.modal.SetSize(m.width, m.height)
+
+	mgr := m.manager
+	return m, tea.Batch(modal.SpinnerTick(), func() tea.Msg {
+		mgr.StopAll()
+		return modal.LoadingDoneMsg{Action: "quit"}
+	})
+}
+
+func (m *Model) handleLoadingDone(msg modal.LoadingDoneMsg) (tea.Model, tea.Cmd) {
+	switch msg.Action {
+	case "close_thread":
+		t := m.store.FindThread(msg.ProjectID, msg.ThreadID)
+		if t != nil {
+			t.Status = store.ThreadSuspended
+			t.UpdatedAt = time.Now()
+		}
+		if m.panel.ThreadID() == msg.ThreadID {
+			m.panel.SetThread("")
+			m.panel.SetContent("")
+			m.store.State.ActiveThread = ""
+			m.sidebar.SetActiveThread("")
+		}
+		m.sidebar.Rebuild()
+		m.store.Save()
+		return m, nil
+
+	case "delete_thread":
+		if m.panel.ThreadID() == msg.ThreadID {
+			m.panel.SetThread("")
+			m.panel.SetContent("")
+			m.store.State.ActiveThread = ""
+			m.sidebar.SetActiveThread("")
+		}
+		p := m.store.FindProject(msg.ProjectID)
+		if p != nil {
+			for i, t := range p.Threads {
+				if t.ID == msg.ThreadID {
+					p.Threads = append(p.Threads[:i], p.Threads[i+1:]...)
+					break
+				}
+			}
+		}
+		m.sidebar.Rebuild()
+		m.store.Save()
+		return m, nil
+
+	case "delete_project":
+		if m.store.State.ActiveProject == msg.ProjectID {
+			m.panel.SetThread("")
+			m.panel.SetContent("")
+			m.store.State.ActiveProject = ""
+			m.store.State.ActiveThread = ""
+			m.sidebar.SetActiveThread("")
+		}
+		projects := m.store.State.Projects
+		for i, proj := range projects {
+			if proj.ID == msg.ProjectID {
+				m.store.State.Projects = append(projects[:i], projects[i+1:]...)
+				break
+			}
+		}
+		m.sidebar.Rebuild()
+		m.store.Save()
+		return m, nil
+
+	case "quit":
+		return m, tea.Quit
+	}
 	return m, nil
 }
 
@@ -435,12 +500,71 @@ func (m *Model) handleModalSubmit(msg modal.SubmitMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case modal.ModalConfirmDelete:
-		if msg.ThreadID != "" {
-			return m.deleteThread(msg.ProjectID, msg.ThreadID)
-		}
-		return m.deleteProject(msg.ProjectID)
+		return m.startDelete(msg.ProjectID, msg.ThreadID)
 	}
 	return m, nil
+}
+
+// startDelete shows loading and runs delete in background.
+func (m *Model) startDelete(projectID, threadID string) (tea.Model, tea.Cmd) {
+	if threadID != "" {
+		// Delete thread
+		t := m.store.FindThread(projectID, threadID)
+		name := "thread"
+		if t != nil {
+			name = t.Name
+		}
+		running := m.manager.IsRunning(threadID)
+
+		m.modal.ShowLoading(
+			"Deleting thread",
+			"Stopping \""+name+"\" and cleaning up...",
+			"delete_thread", projectID, threadID,
+		)
+		m.modal.SetSize(m.width, m.height)
+
+		mgr := m.manager
+		pid, tid := projectID, threadID
+		return m, tea.Batch(modal.SpinnerTick(), func() tea.Msg {
+			if running {
+				mgr.Close(tid)
+			}
+			return modal.LoadingDoneMsg{Action: "delete_thread", ProjectID: pid, ThreadID: tid}
+		})
+	}
+
+	// Delete project
+	p := m.store.FindProject(projectID)
+	name := "project"
+	if p != nil {
+		name = p.Name
+	}
+
+	m.modal.ShowLoading(
+		"Deleting project",
+		"Stopping sessions in \""+name+"\" and cleaning up...",
+		"delete_project", projectID, "",
+	)
+	m.modal.SetSize(m.width, m.height)
+
+	// Collect running thread IDs
+	var runningThreads []string
+	if p != nil {
+		for _, t := range p.Threads {
+			if m.manager.IsRunning(t.ID) {
+				runningThreads = append(runningThreads, t.ID)
+			}
+		}
+	}
+
+	mgr := m.manager
+	pid := projectID
+	return m, tea.Batch(modal.SpinnerTick(), func() tea.Msg {
+		for _, tid := range runningThreads {
+			mgr.Close(tid)
+		}
+		return modal.LoadingDoneMsg{Action: "delete_project", ProjectID: pid}
+	})
 }
 
 func (m *Model) addProject(path string) (tea.Model, tea.Cmd) {
@@ -504,7 +628,6 @@ func (m *Model) trackInput(threadID string, msg tea.KeyMsg) {
 	if t == nil {
 		return
 	}
-	// Don't track if thread was manually renamed
 	if !strings.HasPrefix(t.Name, "Thread ") {
 		return
 	}
@@ -512,9 +635,7 @@ func (m *Model) trackInput(threadID string, msg tea.KeyMsg) {
 	buf := m.inputBuf[threadID]
 
 	if msg.Type == tea.KeyEnter && len(buf) > 0 {
-		// User pressed enter — use buffer as thread name
-		name := string(buf)
-		name = strings.TrimSpace(name)
+		name := strings.TrimSpace(string(buf))
 		if name != "" {
 			if utf8.RuneCountInString(name) > 40 {
 				runes := []rune(name)
@@ -533,7 +654,6 @@ func (m *Model) trackInput(threadID string, msg tea.KeyMsg) {
 		buf = append(buf, []byte(string(msg.Runes))...)
 		m.inputBuf[threadID] = buf
 	} else if msg.Type == tea.KeyBackspace && len(buf) > 0 {
-		// Remove last rune
 		s := string(buf)
 		runes := []rune(s)
 		if len(runes) > 0 {
