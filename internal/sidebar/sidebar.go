@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/sviniabanditka/claudex/internal/store"
-	"github.com/sviniabanditka/claudex/internal/theme"
+	"github.com/sviniabanditka/clmux/internal/store"
+	"github.com/sviniabanditka/clmux/internal/theme"
 )
 
 type ItemType int

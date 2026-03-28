@@ -13,11 +13,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 
-	"github.com/sviniabanditka/claudex/internal/modal"
-	"github.com/sviniabanditka/claudex/internal/panel"
-	"github.com/sviniabanditka/claudex/internal/session"
-	"github.com/sviniabanditka/claudex/internal/sidebar"
-	"github.com/sviniabanditka/claudex/internal/store"
+	"github.com/sviniabanditka/clmux/internal/modal"
+	"github.com/sviniabanditka/clmux/internal/panel"
+	"github.com/sviniabanditka/clmux/internal/session"
+	"github.com/sviniabanditka/clmux/internal/sidebar"
+	"github.com/sviniabanditka/clmux/internal/store"
 )
 
 type focus int

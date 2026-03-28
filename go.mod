@@ -1,4 +1,4 @@
-module github.com/sviniabanditka/claudex
+module github.com/sviniabanditka/clmux
 
 go 1.25.6
 

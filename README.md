@@ -1,4 +1,4 @@
-# claudex
+# clmux
 
 A terminal multiplexer for [Claude Code](https://claude.ai/claude-code). Manage multiple Claude sessions across projects from a single TUI.
 
@@ -17,15 +17,15 @@ https://github.com/user-attachments/assets/0593d218-b5c1-454d-9d77-1a21ff24e4ec
 ## Install
 
 ```bash
-go install github.com/sviniabanditka/claudex@latest
+go install github.com/sviniabanditka/clmux@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/sviniabanditka/claudex.git
-cd claudex
-go build -o claudex .
+git clone https://github.com/sviniabanditka/clmux.git
+cd clmux
+go build -o clmux .
 ```
 
 > Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) to be installed and available in your PATH.
@@ -33,7 +33,7 @@ go build -o claudex .
 ## Usage
 
 ```bash
-claudex
+clmux
 ```
 
 ### Sidebar
@@ -48,7 +48,7 @@ claudex
 | `d` | Delete (with confirmation) |
 | `Ctrl+B` | Switch focus to panel |
 
-Mouse: click items to select, click `[+]` `[x]` `[r]` `[−]` buttons, right-click for context menu, scroll to navigate.
+Mouse: click items to select, click `[+]` `[x]` `[r]` `[−]` buttons, scroll to navigate.
 
 ### Panel
 
@@ -57,9 +57,9 @@ When focused on the panel, all input goes directly to the running Claude session
 ## How it works
 
 ```
-┌─────────────────────┬──────────────────────────────────────┐
-│  PROJECTS       [+] │                                      │
-│  ▼ myapp    [+] [x] │  Claude session output               │
+┌──────────────────────┬──────────────────────────────────────┐
+│  PROJECTS       [+]  │                                      │
+│  ▼ myapp    [+] [x]  │  Claude session output               │
 │    ~/projects/myapp  │                                      │
 │  › ● fix auth bug    │  > fix the auth middleware           │
 │    ● refactor db     │                                      │
@@ -68,7 +68,7 @@ When focused on the panel, all input goes directly to the running Claude session
 │                      │                                      │
 │──────────────────────│                                      │
 │ a:add enter:open     │                                      │
-└─────────────────────┴──────────────────────────────────────┘
+└──────────────────────┴──────────────────────────────────────┘
 ```
 
 Each project maps to a directory where Claude runs. Threads are individual Claude sessions within that project. Claudex spawns Claude in a PTY, pipes output through a VT100 emulator, and renders it in the panel.
@@ -77,7 +77,7 @@ Sessions are stopped with `SIGTERM` on close — Claude saves the conversation. 
 
 ## Config
 
-State is stored in `~/.config/claudex/state.json`. Claude's own session data lives in `~/.claude/projects/`.
+State is stored in `~/.config/clmux/state.json`. Claude's own session data lives in `~/.claude/projects/`.
 
 ## Tech
 

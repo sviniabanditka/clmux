@@ -16,7 +16,7 @@ func New() (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(home, ".config", "claudex")
+	dir := filepath.Join(home, ".config", "clmux")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}

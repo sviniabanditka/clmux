@@ -1,6 +1,6 @@
 package app
 
-import "github.com/sviniabanditka/claudex/internal/store"
+import "github.com/sviniabanditka/clmux/internal/store"
 
 // PtyOutputMsg delivers raw PTY output for a specific thread.
 type PtyOutputMsg struct {

@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/sviniabanditka/claudex/internal/panel"
+	"github.com/sviniabanditka/clmux/internal/panel"
 )
 
 // PtyOutputMsg delivers raw PTY output for a specific thread.
